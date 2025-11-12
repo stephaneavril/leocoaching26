@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react"; // Añadir useCallback
 
 type Message = { role: "user" | "coach"; text: string };
 
@@ -7,6 +7,10 @@ function speak(text: string) {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "es-ES";
+  // Esperar a que la voz termine antes de continuar
+  utterance.onend = () => {
+    // Puedes añadir lógica aquí si necesitas hacer algo después de que la coach hable
+  };
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utterance);
 }
@@ -18,40 +22,112 @@ export default function InteractiveSession() {
   const [input, setInput] = useState("");
   const [loadingEval, setLoadingEval] = useState(false);
   const [evalResult, setEvalResult] = useState<any>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const recognitionRef = useRef<any>(null);
 
-  // NUEVO: Referencia para el elemento de video de la webcam
+  // NUEVOS ESTADOS para el control de voz continuo
+  const [isMicActive, setIsMicActive] = useState(false); // ¿El micrófono está encendido?
+  const [isCoachSpeaking, setIsCoachSpeaking] = useState(false); // ¿La coach está hablando?
+  const recognitionRef = useRef<any>(null);
+  const interimTranscriptRef = useRef<string>(''); // Para guardar el texto intermedio
+  const finalTranscriptRef = useRef<string>(''); // Para guardar el texto final
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null); // Para detectar pausas
+
   const webcamRef = useRef<HTMLVideoElement>(null);
 
-  // Efecto para hablar, configurar reconocimiento de voz y activar cámara
+  // Función para procesar el texto del usuario y obtener respuesta del coach
+  // Usamos useCallback para que esta función no se recree innecesariamente
+  const processUserSpeech = useCallback((userText: string) => {
+    if (!userText.trim()) return;
+
+    const userMessage: Message = { role: "user", text: userText };
+    const coachReply = autoCoachReply(userText);
+    const coachMessage: Message = { role: "coach", text: coachReply };
+
+    setMessages(prevMessages => [...prevMessages, userMessage, coachMessage]);
+    
+    setIsCoachSpeaking(true); // Indicar que la coach va a hablar
+    const utterance = new SpeechSynthesisUtterance(coachReply);
+    utterance.lang = "es-ES";
+    utterance.onend = () => {
+      setIsCoachSpeaking(false); // La coach terminó de hablar
+      if (isMicActive) { // Si el micrófono estaba activo, reiniciarlo para el usuario
+         recognitionRef.current?.start(); // Reiniciar el reconocimiento después de que la coach termine
+      }
+    };
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+    
+    setInput(""); // Limpiar el input
+    finalTranscriptRef.current = ''; // Resetear transcripción final
+    interimTranscriptRef.current = ''; // Resetear transcripción intermedia
+
+  }, [isMicActive]); // Dependencia: si isMicActive cambia, useCallback se recrea
+
+  // Efecto para inicializar SpeechSynthesis, SpeechRecognition y Webcam
   useEffect(() => {
-    // 1. Hablar el mensaje inicial
+    // Hablar el mensaje inicial al cargar la página
     speak(messages[0].text);
 
-    // 2. Configurar reconocimiento de voz (Speech-to-Text)
+    // Configurar reconocimiento de voz
     if (typeof window !== "undefined" && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       const recognition = new SpeechRecognition();
       recognition.lang = 'es-ES';
-      recognition.continuous = false;
+      recognition.continuous = true; // ESCUCHA CONTINUAMENTE
       recognition.interimResults = true;
 
       recognition.onresult = (event: any) => {
-        const transcript = Array.from(event.results)
-          .map((result: any) => result[0])
-          .map((result: any) => result.transcript)
-          .join('');
-        setInput(transcript);
+        let interim = '';
+        let final = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            final += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+        interimTranscriptRef.current = interim;
+        finalTranscriptRef.current = final;
+        setInput(finalTranscriptRef.current + interimTranscriptRef.current); // Mostrar ambas en el input
+
+        // Resetear el temporizador de silencio con cada resultado
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(() => {
+            if (finalTranscriptRef.current.trim() !== '' && !isCoachSpeaking) {
+                // Si hay una transcripción final y la coach no está hablando, procesar
+                processUserSpeech(finalTranscriptRef.current);
+                setInput(''); // Limpiar el input después de enviar
+                finalTranscriptRef.current = '';
+                interimTranscriptRef.current = '';
+            } else if (interimTranscriptRef.current.trim() !== '' && !isCoachSpeaking) {
+                // Si hay una transcripción intermedia y la coach no está hablando, procesar
+                processUserSpeech(interimTranscriptRef.current);
+                setInput(''); // Limpiar el input después de enviar
+                finalTranscriptRef.current = '';
+                interimTranscriptRef.current = '';
+            }
+        }, 1500); // Pequeña pausa de 1.5 segundos para detectar final de frase
+
       };
 
-      recognition.onend = () => setIsRecording(false);
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        if (event.error === 'no-speech' || event.error === 'audio-capture' || event.error === 'not-allowed') {
+            setIsMicActive(false); // Detener el micrófono si hay un error serio
+        }
+      };
+
+      recognition.onend = () => {
+        // Si el micrófono debería estar activo, pero el navegador lo apagó, reiniciarlo
+        if (isMicActive && !isCoachSpeaking) {
+          recognitionRef.current?.start();
+        }
+      };
       recognitionRef.current = recognition;
     } else {
       console.warn("El reconocimiento de voz no es soportado por este navegador.");
     }
 
-    // 3. NUEVO: Activar la cámara web del usuario
+    // Activar la cámara web del usuario
     async function getWebcam() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -67,42 +143,30 @@ export default function InteractiveSession() {
     
     // Función de limpieza
     return () => {
-      window.speechSynthesis.cancel(); // Detener voz al salir
-      // Detener la cámara al salir
+      window.speechSynthesis.cancel();
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       if (webcamRef.current && webcamRef.current.srcObject) {
         const stream = webcamRef.current.srcObject as MediaStream;
         stream.getTracks().forEach(track => track.stop());
       }
     };
-  }, []); // El array vacío [] asegura que esto solo se ejecute una vez
+  }, [isMicActive, isCoachSpeaking, processUserSpeech]); // Dependencias para re-ejecutar el efecto si cambian
 
-  // Función para enviar mensaje (con tipos corregidos)
-  const send = (text: string) => {
-    if (!text.trim()) return;
-
-    const userMessage: Message = { role: "user", text };
-    const next = [...messages, userMessage];
-    const coachReply = autoCoachReply(text);
-    const coachMessage: Message = { role: "coach", text: coachReply };
-
-    setMessages([...next, coachMessage]);
-    speak(coachReply);
-    setInput("");
-  };
-
-  // Función para grabar voz
-  const toggleRecording = () => {
+  // Control para activar/desactivar el micrófono
+  const toggleMicActive = () => {
     if (!recognitionRef.current) return;
-    if (isRecording) {
+
+    if (isMicActive) {
       recognitionRef.current.stop();
-      setIsRecording(false);
     } else {
       recognitionRef.current.start();
-      setIsRecording(true);
     }
+    setIsMicActive(!isMicActive);
   };
 
-  // Función de evaluación (sin cambios)
   const evaluate = async () => {
     setLoadingEval(true);
     try {
@@ -119,8 +183,6 @@ export default function InteractiveSession() {
     }
   };
 
-  // --- RENDERIZADO (JSX) ---
-  // Ahora usa 'className' en lugar de 'style'
   return (
     <>
       <header className="session-header">
@@ -131,7 +193,7 @@ export default function InteractiveSession() {
         {/* Columna Izquierda: Coach */}
         <div className="coach-view">
           <img
-            src="/avatar.png" // Esta es tu IMAGEN FIJA
+            src="/avatar.png"
             alt="Avatar"
             className="coach-avatar"
           />
@@ -165,18 +227,22 @@ export default function InteractiveSession() {
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Escribe tu respuesta o usa el micrófono..."
-              onKeyDown={(e) => e.key === "Enter" && send(input)}
+              placeholder={isMicActive ? (isCoachSpeaking ? "Coach hablando..." : "Escuchando...") : "Haz clic en 'Micrófono' para hablar..."}
+              disabled={true} // Deshabilitar la entrada manual de texto si la conversación es por voz
             />
             
-            <button 
-              onClick={toggleRecording}
-              className={`record-button ${isRecording ? "recording" : ""}`}
+            <button
+              onClick={toggleMicActive}
+              className={`record-button ${isMicActive ? "recording" : ""}`}
+              disabled={isCoachSpeaking} // Deshabilitar el botón si la coach está hablando
             >
-              {isRecording ? "Detener" : "Hablar"}
+              {isMicActive ? "Micrófono ON" : "Micrófono OFF"}
             </button>
 
-            <button onClick={() => send(input)}>Enviar</button>
+            {/* El botón de Enviar se elimina si la conversación es por voz, o se deja si quieres una opción manual */}
+            {/* Si quieres que se envíe con ENTER, podrías reactivar el input y el botón "Enviar" */}
+            {/* <button onClick={() => send(input)}>Enviar</button> */}
+            
             <button onClick={evaluate} disabled={loadingEval}>
               {loadingEval ? "Evaluando…" : "Evaluar"}
             </button>
@@ -184,7 +250,7 @@ export default function InteractiveSession() {
         </div>
       </main>
 
-      {/* Pop-up de Evaluación (aún sin estilo, pero funciona) */}
+      {/* Pop-up de Evaluación */}
       {evalResult && (
         <section style={{ position: 'fixed', top: 20, right: 20, background: 'white', color: 'black', padding: 20, borderRadius: 8, zIndex: 100, maxWidth: 400 }}>
           <h3>Resultados</h3>
@@ -198,7 +264,7 @@ export default function InteractiveSession() {
   );
 }
 
-// Función de respuesta (sin cambios)
+// Función de respuesta del coach
 function autoCoachReply(userText: string) {
   if (/precio|costo|descuento/i.test(userText)) return "¿Cómo justificarías el valor más allá del precio?";
   if (/doctor|paciente|síntoma/i.test(userText)) return "¿Qué perfil de cliente/paciente tienes en mente y qué beneficio concreto ofreces?";
