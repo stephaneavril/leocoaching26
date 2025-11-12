@@ -4,14 +4,19 @@ import { useState, useEffect, useRef, useCallback } from "react";
 type Message = { role: "user" | "coach"; text: string };
 
 export default function InteractiveSession() {
+  
+  // --- CORRECCIÓN 1: El saludo inicial ---
+  // Cambiamos el saludo genérico por uno que coincida con la personalidad de "Carlos".
+  // Ahora la voz y el primer texto que veas serán idénticos.
   const [messages, setMessages] = useState<Message[]>([
-    { role: "coach", text: "Hola, soy tu coach virtual. ¿Qué objetivo tienes para esta visita?" },
+    { role: "coach", text: "Hola jefe. Me dijiste que querías que habláramos sobre la situación con el Dr. Silva." },
   ]);
+  // --- FIN DE LA CORRECCIÓN 1 ---
+
   const [input, setInput] = useState("");
   const [loadingEval, setLoadingEval] = useState(false);
   const [evalResult, setEvalResult] = useState<any>(null);
 
-  // Estados para la conversación
   const [isMicActive, _setIsMicActive] = useState(false);
   const [isCoachSpeaking, _setIsCoachSpeaking] = useState(false);
   const isMicActiveRef = useRef(isMicActive);
@@ -45,41 +50,36 @@ export default function InteractiveSession() {
     window.speechSynthesis.speak(utterance);
   }, []);
 
-  // --- FUNCIÓN 'processUserSpeech' ACTUALIZADA ---
+  // Función para procesar el texto del usuario
   const processUserSpeech = useCallback(async (userText: string) => {
     if (!userText.trim()) return;
 
-    // 1. Detener el micrófono
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
 
-    // 2. Añadir el mensaje del usuario al historial
     const userMessage: Message = { role: "user", text: userText };
-    // Creamos un nuevo historial que incluye el mensaje del usuario
     const newMessagesHistory = [...messages, userMessage];
     setMessages(newMessagesHistory);
     setInput("");
 
-    // 3. LLAMAR AL CEREBRO (API)
-    // El rol del "coach" (avatar) es 'assistant' para OpenAI
-    // El rol del "usuario" (líder) es 'user' para OpenAI
-    // (Asegurándonos que 'coach' se mapee a 'assistant')
+    // --- CORRECCIÓN 2: Enviar el historial COMPLETO ---
+    // Estábamos borrando el saludo inicial con 'apiMessages.shift()'.
+    // Ahora enviamos TODO el historial, para que la IA sepa lo que "Carlos"
+    // acaba de decir y pueda continuar la conversación con contexto.
     const apiMessages = newMessagesHistory.map(msg => ({
       role: msg.role === "coach" ? "assistant" : "user",
       content: msg.text,
     }));
+    // --- FIN DE LA CORRECCIÓN 2 ---
 
-    // Quitamos el primer mensaje de saludo para no confundir a la IA
-    apiMessages.shift(); 
-    
     let coachReply = "Lo siento, ha ocurrido un error.";
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: apiMessages }), // Enviar el historial
+        body: JSON.stringify({ messages: apiMessages }), // Enviar el historial completo
       });
 
       if (res.ok) {
@@ -93,7 +93,6 @@ export default function InteractiveSession() {
       coachReply = "Error de conexión.";
     }
 
-    // 4. Hablar la respuesta de la IA
     const coachMessage: Message = { role: "coach", text: coachReply };
     setMessages(prev => [...prev, coachMessage]);
 
@@ -104,8 +103,6 @@ export default function InteractiveSession() {
     });
 
   }, [messages, speakCoach]); // Depende de 'messages' y 'speakCoach'
-
-  // --- FIN DE LA ACTUALIZACIÓN ---
 
 
   // Efecto de inicialización (sin cambios)
@@ -168,6 +165,7 @@ export default function InteractiveSession() {
       console.warn("El reconocimiento de voz no es soportado por este navegador.");
     }
 
+    // Habla el NUEVO saludo (el de "Carlos")
     speakCoach(messages[0].text, () => {});
 
     return () => {
@@ -186,10 +184,8 @@ export default function InteractiveSession() {
   // Handler para el botón principal (sin cambios)
   const toggleMicActive = () => {
     if (!recognitionRef.current) return;
-
     const nextState = !isMicActiveRef.current;
     setIsMicActive(nextState);
-
     if (nextState) {
       recognitionRef.current.start();
     } else {
@@ -201,9 +197,8 @@ export default function InteractiveSession() {
   const evaluate = async () => {
     setLoadingEval(true);
     try {
-      // Modificamos el 'transcript' para que sea más legible para la IA de evaluación
       const transcript = messages.map(m => `${m.role === "user" ? "Líder" : "Empleado"}: ${m.text}`).join("\n\n");
-      const res = await fetch("/api/eval", { // AÚN USA EL EVALUADOR DE REGLAS
+      const res = await fetch("/api/eval", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ transcript }),
@@ -271,8 +266,7 @@ export default function InteractiveSession() {
   );
 }
 
-// ESTA FUNCIÓN YA NO SE USA, PERO LA DEJAMOS POR SI ACASO
+// Ya no se usa esta función, la IA se encarga de las respuestas.
 // function autoCoachReply(userText: string) {
-//   if (/precio|costo|descuento/i.test(userText)) return "¿Cómo justificarías el valor más allá del precio?";
-//   return "Entiendo. ¿Cómo lo conectarías con una necesidad específica y un siguiente paso?";
+//   ...
 // }
