@@ -33,7 +33,7 @@ export default function InteractiveSession() {
 
     // Configurar el reconocimiento de voz (Speech-to-Text)
     if (typeof window !== "undefined" && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       const recognition = new SpeechRecognition();
       recognition.lang = 'es-ES';
       recognition.continuous = false; // Solo captura una frase
