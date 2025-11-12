@@ -1,15 +1,14 @@
 "use client";
-// NUEVO: Importar useEffect y useRef
 import { useState, useEffect, useRef } from "react";
 
+// El tipo 'Message' requiere que 'role' sea exactamente "user" o "coach"
 type Message = { role: "user" | "coach"; text: string };
 
-// NUEVO: Función para hablar (Text-to-Speech)
 function speak(text: string) {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = "es-ES"; // Forzar español
-  window.speechSynthesis.cancel(); // Cancelar cualquier cosa anterior
+  utterance.lang = "es-ES";
+  window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utterance);
 }
 
@@ -20,58 +19,59 @@ export default function InteractiveSession() {
   const [input, setInput] = useState("");
   const [loadingEval, setLoadingEval] = useState(false);
   const [evalResult, setEvalResult] = useState<any>(null);
-
-  // NUEVO: Estado para el botón de grabar
   const [isRecording, setIsRecording] = useState(false);
-  // NUEVO: Referencia para el objeto de reconocimiento de voz
   const recognitionRef = useRef<any>(null);
 
-  // NUEVO: useEffect para hablar el primer mensaje y configurar el reconocimiento de voz
   useEffect(() => {
-    // Hablar el mensaje inicial al cargar la página
     speak(messages[0].text);
 
-    // Configurar el reconocimiento de voz (Speech-to-Text)
     if (typeof window !== "undefined" && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
+      
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      
       const recognition = new SpeechRecognition();
       recognition.lang = 'es-ES';
-      recognition.continuous = false; // Solo captura una frase
-      recognition.interimResults = true; // Muestra resultados mientras hablas
+      recognition.continuous = false;
+      recognition.interimResults = true;
 
       recognition.onresult = (event: any) => {
         const transcript = Array.from(event.results)
           .map((result: any) => result[0])
           .map((result: any) => result.transcript)
           .join('');
-        setInput(transcript); // Actualiza el input con la transcripción
+        setInput(transcript);
       };
 
       recognition.onend = () => {
-        setIsRecording(false); // El navegador deja de escuchar
+        setIsRecording(false);
       };
       
       recognitionRef.current = recognition;
     } else {
       console.warn("El reconocimiento de voz no es soportado por este navegador.");
     }
-  }, []); // El array vacío [] asegura que esto solo se ejecute una vez
+  }, []);
 
   const send = (text: string) => {
     if (!text.trim()) return;
-    const next = [...messages, { role: "user", text }];
-    const coachReply = autoCoachReply(text);
-    setMessages([...next, { role: "coach", text: coachReply }]);
-    
-    // NUEVO: Hablar la respuesta del coach
-    speak(coachReply);
 
+    // --- CORRECCIÓN DE TIPO ---
+    // Siendo explícitos con el tipo 'Message'
+    const userMessage: Message = { role: "user", text };
+    const next = [...messages, userMessage];
+    const coachReply = autoCoachReply(text);
+
+    // Siendo explícitos con el tipo 'Message'
+    const coachMessage: Message = { role: "coach", text: coachReply };
+    setMessages([...next, coachMessage]);
+    // --- FIN DE LA CORRECCIÓN ---
+
+    speak(coachReply);
     setInput("");
   };
 
-  // NUEVO: Función para iniciar/detener la grabación de voz
   const toggleRecording = () => {
-    if (!recognitionRef.current) return; // No soportado
+    if (!recognitionRef.current) return;
 
     if (isRecording) {
       recognitionRef.current.stop();
@@ -102,7 +102,7 @@ export default function InteractiveSession() {
     <main style={{ maxWidth: 900, margin: "40px auto", padding: 20 }}>
       <section style={{ display: "flex", gap: 20 }}>
         <img
-          src="/avatar.png" // Esta es tu imagen fija
+          src="/avatar.png"
           alt="Avatar"
           width={220}
           height={220}
@@ -130,12 +130,11 @@ export default function InteractiveSession() {
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Escribe tu respuesta o usa el micrófono..." // Texto actualizado
+              placeholder="Escribe tu respuesta o usa el micrófono..."
               onKeyDown={(e) => e.key === "Enter" && send(input)}
               style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: "1px solid #ddd" }}
             />
             
-            {/* NUEVO: Botón para grabar voz */}
             <button 
               onClick={toggleRecording} 
               style={{ padding: "10px 14px", borderRadius: 8, background: isRecording ? "#FFCDD2" : "#E0E0E0" }}
@@ -156,7 +155,6 @@ export default function InteractiveSession() {
       {evalResult && (
         <section style={{ marginTop: 24 }}>
           <h3>Resultados de la evaluación</h3>
-          {/* CORREGIDO: Arreglé el bug de visualización de JSON que te mencioné antes */}
           <pre style={{ background: "#f7f7f7", padding: 12, borderRadius: 8, whiteSpace: "pre-wrap" }}>
             {JSON.stringify(evalResult, null, 2)}
           </pre>
