@@ -5,14 +5,11 @@ type Message = { role: "user" | "coach"; text: string };
 
 export default function InteractiveSession() {
   
-  // --- CORRECCIÓN 1: El saludo inicial ---
-  // Cambiamos el saludo genérico por uno que coincida con la personalidad de "Carlos".
-  // Ahora la voz y el primer texto que veas serán idénticos.
+  // 1. El saludo inicial es el de "Carlos"
   const [messages, setMessages] = useState<Message[]>([
     { role: "coach", text: "Hola jefe. Me dijiste que querías que habláramos sobre la situación con el Dr. Silva." },
   ]);
-  // --- FIN DE LA CORRECCIÓN 1 ---
-
+  
   const [input, setInput] = useState("");
   const [loadingEval, setLoadingEval] = useState(false);
   const [evalResult, setEvalResult] = useState<any>(null);
@@ -35,7 +32,7 @@ export default function InteractiveSession() {
   const webcamRef = useRef<HTMLVideoElement>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Función para que hable el coach (sin cambios)
+  // Función para que hable el coach (estable)
   const speakCoach = useCallback((text: string, onEnd: () => void) => {
     if (typeof window === "undefined" || !window.speechSynthesis) return;
 
@@ -48,9 +45,11 @@ export default function InteractiveSession() {
     };
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
-  }, []);
+  }, []); // Creada una sola vez
 
-  // Función para procesar el texto del usuario
+  // --- CORRECCIÓN CLAVE: 'processUserSpeech' ---
+  // Esta función se ha reescrito para no depender del estado 'messages',
+  // lo que rompía el bucle de 'useEffect' y causaba el reinicio de la voz.
   const processUserSpeech = useCallback(async (userText: string) => {
     if (!userText.trim()) return;
 
@@ -59,27 +58,33 @@ export default function InteractiveSession() {
     }
 
     const userMessage: Message = { role: "user", text: userText };
-    const newMessagesHistory = [...messages, userMessage];
-    setMessages(newMessagesHistory);
+    let apiMessages: any[] = []; // Variable para guardar el historial para la IA
+
+    // Usamos el 'functional update' de 'setMessages'.
+    // Esto nos da el historial de mensajes más reciente (prevMessages)
+    // sin tener que depender de 'messages' en el useCallback.
+    setMessages(prevMessages => {
+        const newMessagesHistory = [...prevMessages, userMessage];
+        
+        // Creamos la lista de mensajes para la IA aquí dentro
+        apiMessages = newMessagesHistory.map(msg => ({
+            role: msg.role === "coach" ? "assistant" : "user",
+            content: msg.text,
+        }));
+        apiMessages.shift(); // Quitamos el saludo inicial
+
+        return newMessagesHistory; // Devolvemos el nuevo estado
+    });
+
     setInput("");
-
-    // --- CORRECCIÓN 2: Enviar el historial COMPLETO ---
-    // Estábamos borrando el saludo inicial con 'apiMessages.shift()'.
-    // Ahora enviamos TODO el historial, para que la IA sepa lo que "Carlos"
-    // acaba de decir y pueda continuar la conversación con contexto.
-    const apiMessages = newMessagesHistory.map(msg => ({
-      role: msg.role === "coach" ? "assistant" : "user",
-      content: msg.text,
-    }));
-    // --- FIN DE LA CORRECCIÓN 2 ---
-
+    
     let coachReply = "Lo siento, ha ocurrido un error.";
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: apiMessages }), // Enviar el historial completo
+        body: JSON.stringify({ messages: apiMessages }), // Enviar el historial
       });
 
       if (res.ok) {
@@ -93,19 +98,22 @@ export default function InteractiveSession() {
       coachReply = "Error de conexión.";
     }
 
+    // Añadimos la respuesta del coach (también con 'functional update')
     const coachMessage: Message = { role: "coach", text: coachReply };
     setMessages(prev => [...prev, coachMessage]);
 
+    // Y FINALMENTE, hablamos la nueva respuesta
     speakCoach(coachReply, () => {
       if (isMicActiveRef.current) {
         recognitionRef.current.start();
       }
     });
 
-  }, [messages, speakCoach]); // Depende de 'messages' y 'speakCoach'
+  }, [speakCoach]); // Ahora la única dependencia es 'speakCoach', que es estable.
+  // --- FIN DE LA CORRECCIÓN ---
 
 
-  // Efecto de inicialización (sin cambios)
+  // Efecto de inicialización (ahora es estable y solo se ejecuta una vez)
   useEffect(() => {
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(stream => {
@@ -165,7 +173,7 @@ export default function InteractiveSession() {
       console.warn("El reconocimiento de voz no es soportado por este navegador.");
     }
 
-    // Habla el NUEVO saludo (el de "Carlos")
+    // Habla el saludo de "Carlos"
     speakCoach(messages[0].text, () => {});
 
     return () => {
@@ -265,8 +273,3 @@ export default function InteractiveSession() {
     </>
   );
 }
-
-// Ya no se usa esta función, la IA se encarga de las respuestas.
-// function autoCoachReply(userText: string) {
-//   ...
-// }
