@@ -39,10 +39,10 @@ export default function InteractiveSession() {
       recognition.continuous = false; // Solo captura una frase
       recognition.interimResults = true; // Muestra resultados mientras hablas
 
-      recognition.onresult = (event) => {
+      recognition.onresult = (event: any) => {
         const transcript = Array.from(event.results)
-          .map(result => result[0])
-          .map(result => result.transcript)
+          .map((result: any) => result[0])
+          .map((result: any) => result.transcript)
           .join('');
         setInput(transcript); // Actualiza el input con la transcripción
       };
