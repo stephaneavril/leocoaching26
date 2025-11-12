@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { signAccess, signRefresh, cookieOpts } from "@/lib/auth";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 
 async function findUserByEmail(email: string) {
   if (process.env.DEMO_USER === email) {
