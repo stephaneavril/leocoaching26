@@ -11,16 +11,12 @@ export default function InteractiveSession() {
   const [loadingEval, setLoadingEval] = useState(false);
   const [evalResult, setEvalResult] = useState<any>(null);
 
-  // --- Lógica de Estado ---
-  // Estados de React para 'triggers'
+  // Estados para la conversación
   const [isMicActive, _setIsMicActive] = useState(false);
   const [isCoachSpeaking, _setIsCoachSpeaking] = useState(false);
-  
-  // Refs para leer el estado actual DENTRO de callbacks (evita 'stale state')
   const isMicActiveRef = useRef(isMicActive);
   const isCoachSpeakingRef = useRef(isCoachSpeaking);
 
-  // Funciones 'setter' que actualizan tanto el estado de React como el Ref
   const setIsMicActive = (val: boolean) => {
     isMicActiveRef.current = val;
     _setIsMicActive(val);
@@ -29,13 +25,12 @@ export default function InteractiveSession() {
     isCoachSpeakingRef.current = val;
     _setIsCoachSpeaking(val);
   };
-  // --- Fin Lógica de Estado ---
 
   const recognitionRef = useRef<any>(null);
   const webcamRef = useRef<HTMLVideoElement>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Función para que hable el coach
+  // Función para que hable el coach (sin cambios)
   const speakCoach = useCallback((text: string, onEnd: () => void) => {
     if (typeof window === "undefined" || !window.speechSynthesis) return;
 
@@ -44,40 +39,77 @@ export default function InteractiveSession() {
     utterance.lang = "es-ES";
     utterance.onend = () => {
       setIsCoachSpeaking(false);
-      onEnd(); // Llama a la función 'onEnd'
+      onEnd();
     };
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
-  }, []); // Creada una sola vez
+  }, []);
 
-  // Función para procesar el texto del usuario
-  const processUserSpeech = useCallback((userText: string) => {
+  // --- FUNCIÓN 'processUserSpeech' ACTUALIZADA ---
+  const processUserSpeech = useCallback(async (userText: string) => {
     if (!userText.trim()) return;
 
-    // 1. Detener el micrófono manualmente ANTES de procesar
+    // 1. Detener el micrófono
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
 
+    // 2. Añadir el mensaje del usuario al historial
     const userMessage: Message = { role: "user", text: userText };
-    const coachReply = autoCoachReply(userText);
+    // Creamos un nuevo historial que incluye el mensaje del usuario
+    const newMessagesHistory = [...messages, userMessage];
+    setMessages(newMessagesHistory);
+    setInput("");
+
+    // 3. LLAMAR AL CEREBRO (API)
+    // El rol del "coach" (avatar) es 'assistant' para OpenAI
+    // El rol del "usuario" (líder) es 'user' para OpenAI
+    // (Asegurándonos que 'coach' se mapee a 'assistant')
+    const apiMessages = newMessagesHistory.map(msg => ({
+      role: msg.role === "coach" ? "assistant" : "user",
+      content: msg.text,
+    }));
+
+    // Quitamos el primer mensaje de saludo para no confundir a la IA
+    apiMessages.shift(); 
+    
+    let coachReply = "Lo siento, ha ocurrido un error.";
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: apiMessages }), // Enviar el historial
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        coachReply = data.reply;
+      } else {
+        coachReply = "Error al conectar con la IA. Intenta de nuevo.";
+      }
+    } catch (err) {
+      console.error(err);
+      coachReply = "Error de conexión.";
+    }
+
+    // 4. Hablar la respuesta de la IA
     const coachMessage: Message = { role: "coach", text: coachReply };
+    setMessages(prev => [...prev, coachMessage]);
 
-    setMessages(prevMessages => [...prevMessages, userMessage, coachMessage]);
-
-    // 2. Hablar la respuesta. Al terminar, reiniciar el mic si debe estar activo
     speakCoach(coachReply, () => {
-      if (isMicActiveRef.current) { // Leer desde el Ref
+      if (isMicActiveRef.current) {
         recognitionRef.current.start();
       }
     });
 
-    setInput("");
-  }, [speakCoach]); // Depende de 'speakCoach' (que es estable)
+  }, [messages, speakCoach]); // Depende de 'messages' y 'speakCoach'
 
-  // Efecto de inicialización: Se ejecuta UNA SOLA VEZ
+  // --- FIN DE LA ACTUALIZACIÓN ---
+
+
+  // Efecto de inicialización (sin cambios)
   useEffect(() => {
-    // 1. Activar la cámara web
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(stream => {
         if (webcamRef.current) {
@@ -88,7 +120,6 @@ export default function InteractiveSession() {
         console.error("Error al acceder a la webcam:", err);
       });
 
-    // 2. Configurar el reconocimiento de voz
     if (typeof window !== "undefined" && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       const recognition = new SpeechRecognition();
@@ -115,7 +146,7 @@ export default function InteractiveSession() {
 
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         silenceTimerRef.current = setTimeout(() => {
-          if (finalTranscript.trim() && !isCoachSpeakingRef.current) { // Leer desde Ref
+          if (finalTranscript.trim() && !isCoachSpeakingRef.current) {
             processUserSpeech(finalTranscript.trim());
             finalTranscript = '';
           }
@@ -127,7 +158,6 @@ export default function InteractiveSession() {
         if (event.error === 'not-allowed') setIsMicActive(false);
       };
       
-      // CORRECCIÓN: 'onend' ya no intenta reiniciar.
       recognition.onend = () => {
         console.log("Recognition service ended.");
       };
@@ -138,12 +168,8 @@ export default function InteractiveSession() {
       console.warn("El reconocimiento de voz no es soportado por este navegador.");
     }
 
-    // 3. Hablar el mensaje inicial
-    speakCoach(messages[0].text, () => {
-      // No hacer nada especial después del saludo
-    });
+    speakCoach(messages[0].text, () => {});
 
-    // 4. Limpieza al salir
     return () => {
       window.speechSynthesis.cancel();
       if (recognitionRef.current) recognitionRef.current.stop();
@@ -154,31 +180,30 @@ export default function InteractiveSession() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [processUserSpeech, speakCoach]); // Dependencias estables, se ejecuta una vez
+  }, [processUserSpeech, speakCoach]); // Dependencias estables
 
-  
-  // Handler para el botón principal
+
+  // Handler para el botón principal (sin cambios)
   const toggleMicActive = () => {
     if (!recognitionRef.current) return;
 
-    const nextState = !isMicActiveRef.current; // Leer el estado actual desde el Ref
-    setIsMicActive(nextState); // Actualizar el estado de React
+    const nextState = !isMicActiveRef.current;
+    setIsMicActive(nextState);
 
     if (nextState) {
-      // Encendiendo
       recognitionRef.current.start();
     } else {
-      // Apagando
       recognitionRef.current.stop();
     }
   };
 
-  // Función de evaluación
+  // Función de evaluación (sin cambios)
   const evaluate = async () => {
     setLoadingEval(true);
     try {
-      const transcript = messages.map(m => `${m.role === "user" ? "REP" : "COACH"}: ${m.text}`).join("\n");
-      const res = await fetch("/api/eval", {
+      // Modificamos el 'transcript' para que sea más legible para la IA de evaluación
+      const transcript = messages.map(m => `${m.role === "user" ? "Líder" : "Empleado"}: ${m.text}`).join("\n\n");
+      const res = await fetch("/api/eval", { // AÚN USA EL EVALUADOR DE REGLAS
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ transcript }),
@@ -190,6 +215,7 @@ export default function InteractiveSession() {
     }
   };
 
+  // JSX (sin cambios)
   return (
     <>
       <header className="session-header">
@@ -197,44 +223,34 @@ export default function InteractiveSession() {
       </header>
       
       <main className="session-container">
-        {/* Coach */}
         <div className="coach-view">
           <img src="/avatar.png" alt="Avatar" className="coach-avatar" />
         </div>
-
-        {/* Usuario + Chat */}
         <div className="chat-ui">
-          {/* Cámara */}
           <div className="user-view">
             <video ref={webcamRef} autoPlay muted playsInline className="user-webcam"></video>
           </div>
-
-          {/* Mensajes */}
           <div className="chat-messages">
             {messages.map((m, i) => (
               <div key={i} className={`chat-message ${m.role}`}>
-                <b>{m.role === "user" ? "Tú" : "Coach"}</b>
+                <b>{m.role === "user" ? "Tú (Líder)" : "Carlos (Empleado)"}</b>
                 {m.text}
               </div>
             ))}
           </div>
-
-          {/* Controles */}
           <div className="chat-controls">
             <input
               value={input}
               readOnly
-              placeholder={isCoachSpeaking ? "Coach hablando..." : (isMicActive ? "Escuchando..." : "Micrófono apagado")}
+              placeholder={isCoachSpeaking ? "Carlos hablando..." : (isMicActive ? "Escuchando..." : "Micrófono apagado")}
             />
-            
             <button
               onClick={toggleMicActive}
               className={`record-button ${isMicActive ? "recording" : ""}`}
               disabled={isCoachSpeaking}
             >
-              {isMicActive ? "Micrófono ON" : "Micrófono OFF"}
+              {isMicActive ? "Micróf ON" : "Micróf OFF"}
             </button>
-            
             <button onClick={evaluate} disabled={loadingEval}>
               {loadingEval ? "Evaluando…" : "Evaluar"}
             </button>
@@ -242,7 +258,6 @@ export default function InteractiveSession() {
         </div>
       </main>
 
-      {/* Pop-up de Evaluación */}
       {evalResult && (
         <section style={{ position: 'fixed', top: 20, right: 20, background: 'white', color: 'black', padding: 20, borderRadius: 8, zIndex: 100, maxWidth: 400 }}>
           <h3>Resultados</h3>
@@ -256,10 +271,8 @@ export default function InteractiveSession() {
   );
 }
 
-// Función de respuesta del coach
-function autoCoachReply(userText: string) {
-  if (/precio|costo|descuento/i.test(userText)) return "¿Cómo justificarías el valor más allá del precio?";
-  if (/doctor|paciente|síntoma/i.test(userText)) return "¿Qué perfil de cliente/paciente tienes en mente y qué beneficio concreto ofreces?";
-  if (/evidencia|estudio|dato/i.test(userText)) return "¿Cómo traduces ese dato a un resultado medible?";
-  return "Entiendo. ¿Cómo lo conectarías con una necesidad específica y un siguiente paso?";
-}
+// ESTA FUNCIÓN YA NO SE USA, PERO LA DEJAMOS POR SI ACASO
+// function autoCoachReply(userText: string) {
+//   if (/precio|costo|descuento/i.test(userText)) return "¿Cómo justificarías el valor más allá del precio?";
+//   return "Entiendo. ¿Cómo lo conectarías con una necesidad específica y un siguiente paso?";
+// }
