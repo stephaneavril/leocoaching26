@@ -5,7 +5,7 @@ type Message = { role: "user" | "coach"; text: string };
 
 export default function InteractiveSession() {
   const [messages, setMessages] = useState<Message[]>([
-    { role: "coach", text: "Hola, soy tu coach virtual. ¿Qué objetivo tienes para esta visita?" },
+    { role: "coach" as const, text: "Hola, soy tu coach virtual. ¿Qué objetivo tienes para esta visita?" },
   ]);
   const [input, setInput] = useState("");
   const [loadingEval, setLoadingEval] = useState(false);
@@ -13,16 +13,21 @@ export default function InteractiveSession() {
 
   const send = (text: string) => {
     if (!text.trim()) return;
-    const next = [...messages, { role: "user", text }];
-    const coachReply = autoCoachReply(text);
-    setMessages([...next, { role: "coach", text: coachReply }]);
+
+    setMessages(prev => [
+      ...prev,
+      { role: "user" as const, text },
+      { role: "coach" as const, text: autoCoachReply(text) }
+    ]);
     setInput("");
   };
 
   const evaluate = async () => {
     setLoadingEval(true);
     try {
-      const transcript = messages.map(m => `${m.role === "user" ? "REP" : "COACH"}: ${m.text}`).join("\n");
+      const transcript = messages
+        .map(m => `${m.role === "user" ? "REP" : "COACH"}: ${m.text}`)
+        .join("\n");
       const res = await fetch("/api/eval", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -85,9 +90,7 @@ export default function InteractiveSession() {
         <section style={{ marginTop: 24 }}>
           <h3>Resultados de la evaluación</h3>
           <pre style={{ background: "#f7f7f7", padding: 12, borderRadius: 8 }}>
-{`${
-"```json\n" + "${JSON.stringify(evalResult, null, 2)}" + "\n```"
-}`}
+            {JSON.stringify(evalResult, null, 2)}
           </pre>
         </section>
       )}
@@ -96,8 +99,11 @@ export default function InteractiveSession() {
 }
 
 function autoCoachReply(userText: string) {
-  if (/precio|costo|descuento/i.test(userText)) return "¿Cómo justificarías el valor más allá del precio?";
-  if (/doctor|paciente|síntoma/i.test(userText)) return "¿Qué perfil de cliente/paciente tienes en mente y qué beneficio concreto ofreces?";
-  if (/evidencia|estudio|dato/i.test(userText)) return "¿Cómo traduces ese dato a un resultado medible?";
+  if (/precio|costo|descuento/i.test(userText))
+    return "¿Cómo justificarías el valor más allá del precio?";
+  if (/doctor|paciente|síntoma/i.test(userText))
+    return "¿Qué perfil de cliente/paciente tienes en mente y qué beneficio concreto ofreces?";
+  if (/evidencia|estudio|dato/i.test(userText))
+    return "¿Cómo traduces ese dato a un resultado medible?";
   return "Entiendo. ¿Cómo lo conectarías con una necesidad específica y un siguiente paso?";
 }
