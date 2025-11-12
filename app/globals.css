@@ -1,0 +1,5 @@
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #ffffff; color: #111; }
+a { color: inherit; text-decoration: none; }
+button { cursor: pointer; }
