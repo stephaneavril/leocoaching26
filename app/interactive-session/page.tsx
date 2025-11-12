@@ -11,24 +11,25 @@ export default function InteractiveSession() {
   const [loadingEval, setLoadingEval] = useState(false);
   const [evalResult, setEvalResult] = useState<any>(null);
 
-  // --- NUEVA LÓGICA DE ESTADO ---
-  // Usamos useState para los 'triggers' de React
+  // --- Lógica de Estado ---
+  // Estados de React para 'triggers'
   const [isMicActive, _setIsMicActive] = useState(false);
   const [isCoachSpeaking, _setIsCoachSpeaking] = useState(false);
-  // Usamos useRef para leer el estado actual DENTRO de los callbacks
+  
+  // Refs para leer el estado actual DENTRO de callbacks (evita 'stale state')
   const isMicActiveRef = useRef(isMicActive);
   const isCoachSpeakingRef = useRef(isCoachSpeaking);
 
-  // Funciones setter que actualizan AMBOS
+  // Funciones 'setter' que actualizan tanto el estado de React como el Ref
   const setIsMicActive = (val: boolean) => {
-    _setIsMicActive(val);
     isMicActiveRef.current = val;
+    _setIsMicActive(val);
   };
   const setIsCoachSpeaking = (val: boolean) => {
-    _setIsCoachSpeaking(val);
     isCoachSpeakingRef.current = val;
+    _setIsCoachSpeaking(val);
   };
-  // --- FIN DE LA NUEVA LÓGICA DE ESTADO ---
+  // --- Fin Lógica de Estado ---
 
   const recognitionRef = useRef<any>(null);
   const webcamRef = useRef<HTMLVideoElement>(null);
@@ -43,15 +44,20 @@ export default function InteractiveSession() {
     utterance.lang = "es-ES";
     utterance.onend = () => {
       setIsCoachSpeaking(false);
-      onEnd();
+      onEnd(); // Llama a la función 'onEnd'
     };
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
-  }, []); // Dependencia vacía, se crea una sola vez
+  }, []); // Creada una sola vez
 
   // Función para procesar el texto del usuario
   const processUserSpeech = useCallback((userText: string) => {
     if (!userText.trim()) return;
+
+    // 1. Detener el micrófono manualmente ANTES de procesar
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
 
     const userMessage: Message = { role: "user", text: userText };
     const coachReply = autoCoachReply(userText);
@@ -59,10 +65,9 @@ export default function InteractiveSession() {
 
     setMessages(prevMessages => [...prevMessages, userMessage, coachMessage]);
 
+    // 2. Hablar la respuesta. Al terminar, reiniciar el mic si debe estar activo
     speakCoach(coachReply, () => {
-      // Coach terminó, reiniciar el mic si debe estar activo
-      // Leemos desde el REF para evitar 'stale state'
-      if (recognitionRef.current && isMicActiveRef.current) {
+      if (isMicActiveRef.current) { // Leer desde el Ref
         recognitionRef.current.start();
       }
     });
@@ -110,8 +115,7 @@ export default function InteractiveSession() {
 
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         silenceTimerRef.current = setTimeout(() => {
-          // Leer desde el REF para evitar 'stale state'
-          if (finalTranscript.trim() && !isCoachSpeakingRef.current) {
+          if (finalTranscript.trim() && !isCoachSpeakingRef.current) { // Leer desde Ref
             processUserSpeech(finalTranscript.trim());
             finalTranscript = '';
           }
@@ -123,8 +127,7 @@ export default function InteractiveSession() {
         if (event.error === 'not-allowed') setIsMicActive(false);
       };
       
-      // ESTA ES LA CORRECCIÓN CLAVE:
-      // El 'onend' ya no intenta reiniciar. El useEffect 'controlador' lo hará.
+      // CORRECCIÓN: 'onend' ya no intenta reiniciar.
       recognition.onend = () => {
         console.log("Recognition service ended.");
       };
@@ -137,7 +140,7 @@ export default function InteractiveSession() {
 
     // 3. Hablar el mensaje inicial
     speakCoach(messages[0].text, () => {
-      // No hacer nada especial
+      // No hacer nada especial después del saludo
     });
 
     // 4. Limpieza al salir
@@ -150,30 +153,29 @@ export default function InteractiveSession() {
         stream.getTracks().forEach(track => track.stop());
       }
     };
-  }, [processUserSpeech, speakCoach]); // Dependencias estables, solo se ejecuta una vez
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [processUserSpeech, speakCoach]); // Dependencias estables, se ejecuta una vez
 
-  // Efecto "Controlador": Este es el ÚNICO lugar que llama a start() y stop()
-  useEffect(() => {
-    if (!recognitionRef.current) return;
-
-    if (isMicActive && !isCoachSpeaking) {
-      // Si el mic debe estar ON y el coach NO habla -> ENCENDER
-      recognitionRef.current.start();
-    } else {
-      // Si el mic debe estar OFF o el coach SÍ habla -> APAGAR
-      recognitionRef.current.stop();
-    }
-  }, [isMicActive, isCoachSpeaking]); // Reacciona a los cambios de estos dos estados
-
+  
   // Handler para el botón principal
   const toggleMicActive = () => {
-    setIsMicActive(!isMicActive);
+    if (!recognitionRef.current) return;
+
+    const nextState = !isMicActiveRef.current; // Leer el estado actual desde el Ref
+    setIsMicActive(nextState); // Actualizar el estado de React
+
+    if (nextState) {
+      // Encendiendo
+      recognitionRef.current.start();
+    } else {
+      // Apagando
+      recognitionRef.current.stop();
+    }
   };
 
   // Función de evaluación
   const evaluate = async () => {
     setLoadingEval(true);
-    // ... (código de evaluación sin cambios)
     try {
       const transcript = messages.map(m => `${m.role === "user" ? "REP" : "COACH"}: ${m.text}`).join("\n");
       const res = await fetch("/api/eval", {
