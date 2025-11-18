@@ -32,7 +32,8 @@ export default function InteractiveSession() {
 
   // ---- Voz (STT + TTS) ----
   const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  // 👇 OJO: aquí quitamos SpeechRecognition y usamos any
+  const recognitionRef = useRef<any>(null);
   const [speaking, setSpeaking] = useState(false);
 
   // ---- Cámara del usuario ----
@@ -195,12 +196,15 @@ export default function InteractiveSession() {
       );
       return;
     }
-    const rec: SpeechRecognition = new SR();
+
+    // 👇 quitamos el tipo SpeechRecognition y usamos any
+    const rec: any = new SR();
     rec.lang = "es-MX";
     rec.continuous = true;
     rec.interimResults = true;
 
-    rec.onresult = (ev: SpeechRecognitionEvent) => {
+    // 👇 aquí también: SpeechRecognitionEvent -> any
+    rec.onresult = (ev: any) => {
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
         const res = ev.results[i];
         if (res.isFinal) {
@@ -209,7 +213,7 @@ export default function InteractiveSession() {
         }
       }
     };
-    rec.onerror = (e) => console.warn("STT error:", e.error);
+    rec.onerror = (e: any) => console.warn("STT error:", e.error);
     rec.onend = () => {
       if (listening) {
         try {
