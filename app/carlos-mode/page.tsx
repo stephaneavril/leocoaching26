@@ -1,8 +1,6 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
 
-type Message = { role: "user" | "coach"; text: string };
+import { useRouter } from "next/navigation";
 
 type CarlosMode =
   | "frustrado"
@@ -12,114 +10,124 @@ type CarlosMode =
   | "proactivo"
   | "resignado";
 
-export default function InteractiveSession() {
-  const searchParams = useSearchParams();
-  const urlMode = searchParams.get("mode") as CarlosMode | null;
-  const initialMode: CarlosMode =
-    urlMode ||
-    (typeof window !== "undefined"
-      ? ((sessionStorage.getItem("carlosMode") as CarlosMode) || "proactivo")
-      : "proactivo");
+const MODES: { id: CarlosMode; title: string; desc: string; emoji: string }[] = [
+  {
+    id: "frustrado",
+    title: "Carlos frustrado",
+    desc: "Se siente bloqueado, ya intentó varias veces con el Dr. Silva.",
+    emoji: "😥",
+  },
+  {
+    id: "enojado",
+    title: "Carlos enojado",
+    desc: "Está molesto, siente injusticia y culpa a todos.",
+    emoji: "😠",
+  },
+  {
+    id: "inseguro",
+    title: "Carlos inseguro",
+    desc: "Duda de sus capacidades y se siente poco competente.",
+    emoji: "😓",
+  },
+  {
+    id: "tecnico",
+    title: "Carlos técnico",
+    desc: "Muy lógico y de datos, busca soluciones concretas.",
+    emoji: "🧠",
+  },
+  {
+    id: "proactivo",
+    title: "Carlos proactivo",
+    desc: "Quiere mejorar y viene con ganas de trabajar.",
+    emoji: "😊",
+  },
+  {
+    id: "resignado",
+    title: "Carlos resignado",
+    desc: "Siente que nada va a cambiar, energía muy baja.",
+    emoji: "😶",
+  },
+];
 
-  const [mode] = useState<CarlosMode>(initialMode);
+export default function CarlosModePage() {
+  const router = useRouter();
 
-  // ---- Estado de conversación ----
-  const [messages, setMessages] = useState<Message[]>(() => [
-    { role: "coach", text: openingByMode(initialMode) },
-  ]);
-  const [input, setInput] = useState("");
-  const [evalResult, setEvalResult] = useState<any>(null);
-
-  // ---- Voz (STT + TTS) ----
-  const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const [speaking, setSpeaking] = useState(false);
-
-  // ---- Cámara del usuario ----
-  const userVideoRef = useRef<HTMLVideoElement | null>(null);
-
-  // ======== UI estilos ========
-  const wrap: React.CSSProperties = {
-    maxWidth: 1200,
-    margin: "24px auto",
-    padding: "16px",
-    minHeight: "100vh",
-    background: "#020617",
-    color: "#e5e7eb",
-  };
-  const header: React.CSSProperties = {
-    textAlign: "center",
-    color: "#bfdbfe",
-    fontSize: 28,
-    fontWeight: 700,
-    marginBottom: 4,
-  };
-  const subHeader: React.CSSProperties = {
-    textAlign: "center",
-    color: "#9ca3af",
-    marginBottom: 16,
-    fontSize: 13,
-  };
-  const grid: React.CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 16,
-    alignItems: "start",
-  };
-  const panel: React.CSSProperties = {
-    background: "#020617",
-    border: "1px solid #1f2937",
-    borderRadius: 12,
-    padding: 12,
-    boxShadow: "0 6px 24px rgba(0,0,0,0.4)",
-  };
-  const tag: React.CSSProperties = {
-    position: "absolute",
-    top: 10,
-    left: 10,
-    background: "rgba(15,23,42,0.9)",
-    color: "#e5e7eb",
-    padding: "6px 10px",
-    borderRadius: 999,
-    fontSize: 11,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
+  const handleSelect = (mode: CarlosMode) => {
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("carlosMode", mode);
+    }
+    router.push(`/interactive-session?mode=${mode}`);
   };
 
-  // ======== Cámara del usuario ========
-  useEffect(() => {
-    (async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: false,
-        });
-        if (userVideoRef.current) {
-          userVideoRef.current.srcObject = stream;
-          await userVideoRef.current.play().catch(() => {});
-        }
-      } catch (e) {
-        console.warn("No se pudo activar la cámara:", e);
-      }
-    })();
-  }, []);
+  return (
+    <main
+      style={{
+        minHeight: "100vh",
+        background: "#020617",
+        color: "#e5e7eb",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        style={{
+          maxWidth: 900,
+          width: "100%",
+        }}
+      >
+        <h1 style={{ textAlign: "center", marginBottom: 8, fontSize: 28 }}>
+          Selecciona el estilo de{" "}
+          <span style={{ color: "#a5b4fc" }}>Carlos</span>
+        </h1>
+        <p
+          style={{
+            textAlign: "center",
+            marginBottom: 24,
+            color: "#9ca3af",
+            fontSize: 14,
+          }}
+        >
+          Elige cómo quieres que se comporte el representante en esta sesión de
+          coaching.
+        </p>
 
-  // ======== TTS de Carlos ========
-  function coachSpeak(text: string) {
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "es-MX";
-      u.rate = 1.0;
-      u.onstart = () => setSpeaking(true);
-      u.onend = () => setSpeaking(false);
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(u);
-    } catch {}
-  }
-
-  // ======== Respuesta de Carlos según MODO ========
-  function carlosReply(mode: CarlosMode, leaderText: string) {
-    const txt = leaderText.toLowerCase();
-
-    switch (mode) {
-      case "frustrado":
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 16,
+          }}
+        >
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              onClick={() => handleSelect(m.id)}
+              style={{
+                textAlign: "left",
+                padding: 14,
+                borderRadius: 12,
+                border: "1px solid #1f2937",
+                background: "#020617",
+                cursor: "pointer",
+              }}
+            >
+              <div style={{ fontSize: 24 }}>{m.emoji}</div>
+              <div style={{ fontWeight: 600, marginTop: 6 }}>{m.title}</div>
+              <div
+                style={{
+                  fontSize: 13,
+                  color: "#9ca3af",
+                  marginTop: 4,
+                }}
+              >
+                {m.desc}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </main>
+  );
+}
