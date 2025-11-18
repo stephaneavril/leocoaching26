@@ -1,275 +1,442 @@
 "use client";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 type Message = { role: "user" | "coach"; text: string };
 
+type CarlosMode =
+  | "frustrado"
+  | "enojado"
+  | "inseguro"
+  | "tecnico"
+  | "proactivo"
+  | "resignado";
+
 export default function InteractiveSession() {
-  
-  // 1. El saludo inicial es el de "Carlos"
-  const [messages, setMessages] = useState<Message[]>([
-    { role: "coach", text: "Hola jefe. Me dijiste que querías que habláramos sobre la situación con el Dr. Silva." },
+  const searchParams = useSearchParams();
+  const urlMode = searchParams.get("mode") as CarlosMode | null;
+  const initialMode: CarlosMode =
+    urlMode ||
+    (typeof window !== "undefined"
+      ? ((sessionStorage.getItem("carlosMode") as CarlosMode) || "proactivo")
+      : "proactivo");
+
+  const [mode] = useState<CarlosMode>(initialMode);
+
+  // ---- Estado de conversación ----
+  const [messages, setMessages] = useState<Message[]>(() => [
+    { role: "coach", text: openingByMode(initialMode) },
   ]);
-  
   const [input, setInput] = useState("");
-  const [loadingEval, setLoadingEval] = useState(false);
   const [evalResult, setEvalResult] = useState<any>(null);
 
-  const [isMicActive, _setIsMicActive] = useState(false);
-  const [isCoachSpeaking, _setIsCoachSpeaking] = useState(false);
-  const isMicActiveRef = useRef(isMicActive);
-  const isCoachSpeakingRef = useRef(isCoachSpeaking);
+  // ---- Voz (STT + TTS) ----
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const [speaking, setSpeaking] = useState(false);
 
-  const setIsMicActive = (val: boolean) => {
-    isMicActiveRef.current = val;
-    _setIsMicActive(val);
+  // ---- Cámara del usuario ----
+  const userVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  // ======== UI estilos ========
+  const wrap: React.CSSProperties = {
+    maxWidth: 1200,
+    margin: "24px auto",
+    padding: "16px",
+    minHeight: "100vh",
+    background: "#020617",
+    color: "#e5e7eb",
   };
-  const setIsCoachSpeaking = (val: boolean) => {
-    isCoachSpeakingRef.current = val;
-    _setIsCoachSpeaking(val);
+  const header: React.CSSProperties = {
+    textAlign: "center",
+    color: "#bfdbfe",
+    fontSize: 28,
+    fontWeight: 700,
+    marginBottom: 4,
+  };
+  const subHeader: React.CSSProperties = {
+    textAlign: "center",
+    color: "#9ca3af",
+    marginBottom: 16,
+    fontSize: 13,
+  };
+  const grid: React.CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 16,
+    alignItems: "start",
+  };
+  const panel: React.CSSProperties = {
+    background: "#020617",
+    border: "1px solid #1f2937",
+    borderRadius: 12,
+    padding: 12,
+    boxShadow: "0 6px 24px rgba(0,0,0,0.4)",
+  };
+  const tag: React.CSSProperties = {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    background: "rgba(15,23,42,0.9)",
+    color: "#e5e7eb",
+    padding: "6px 10px",
+    borderRadius: 999,
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
   };
 
-  const recognitionRef = useRef<any>(null);
-  const webcamRef = useRef<HTMLVideoElement>(null);
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Función para que hable el coach (estable)
-  const speakCoach = useCallback((text: string, onEnd: () => void) => {
-    if (typeof window === "undefined" || !window.speechSynthesis) return;
-
-    setIsCoachSpeaking(true);
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "es-ES";
-    utterance.onend = () => {
-      setIsCoachSpeaking(false);
-      onEnd();
-    };
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-  }, []); // Creada una sola vez
-
-  // --- CORRECCIÓN CLAVE: 'processUserSpeech' ---
-  // Esta función se ha reescrito para no depender del estado 'messages',
-  // lo que rompía el bucle de 'useEffect' y causaba el reinicio de la voz.
-  const processUserSpeech = useCallback(async (userText: string) => {
-    if (!userText.trim()) return;
-
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-
-    const userMessage: Message = { role: "user", text: userText };
-    let apiMessages: any[] = []; // Variable para guardar el historial para la IA
-
-    // Usamos el 'functional update' de 'setMessages'.
-    // Esto nos da el historial de mensajes más reciente (prevMessages)
-    // sin tener que depender de 'messages' en el useCallback.
-    setMessages(prevMessages => {
-        const newMessagesHistory = [...prevMessages, userMessage];
-        
-        // Creamos la lista de mensajes para la IA aquí dentro
-        apiMessages = newMessagesHistory.map(msg => ({
-            role: msg.role === "coach" ? "assistant" : "user",
-            content: msg.text,
-        }));
-        apiMessages.shift(); // Quitamos el saludo inicial
-
-        return newMessagesHistory; // Devolvemos el nuevo estado
-    });
-
-    setInput("");
-    
-    let coachReply = "Lo siento, ha ocurrido un error.";
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: apiMessages }), // Enviar el historial
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        coachReply = data.reply;
-      } else {
-        coachReply = "Error al conectar con la IA. Intenta de nuevo.";
-      }
-    } catch (err) {
-      console.error(err);
-      coachReply = "Error de conexión.";
-    }
-
-    // Añadimos la respuesta del coach (también con 'functional update')
-    const coachMessage: Message = { role: "coach", text: coachReply };
-    setMessages(prev => [...prev, coachMessage]);
-
-    // Y FINALMENTE, hablamos la nueva respuesta
-    speakCoach(coachReply, () => {
-      if (isMicActiveRef.current) {
-        recognitionRef.current.start();
-      }
-    });
-
-  }, [speakCoach]); // Ahora la única dependencia es 'speakCoach', que es estable.
-  // --- FIN DE LA CORRECCIÓN ---
-
-
-  // Efecto de inicialización (ahora es estable y solo se ejecuta una vez)
+  // ======== Cámara del usuario ========
   useEffect(() => {
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-      .then(stream => {
-        if (webcamRef.current) {
-          webcamRef.current.srcObject = stream;
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+        if (userVideoRef.current) {
+          userVideoRef.current.srcObject = stream;
+          await userVideoRef.current.play().catch(() => {});
         }
-      })
-      .catch(err => {
-        console.error("Error al acceder a la webcam:", err);
-      });
+      } catch (e) {
+        console.warn("No se pudo activar la cámara:", e);
+      }
+    })();
+  }, []);
 
-    if (typeof window !== "undefined" && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'es-ES';
-      recognition.continuous = true;
-      recognition.interimResults = true;
-
-      let finalTranscript = '';
-
-      recognition.onresult = (event: any) => {
-        let interimTranscript = '';
-        finalTranscript = '';
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript + ' ';
-          } else {
-            interimTranscript += transcript;
-          }
-        }
-
-        setInput(finalTranscript + interimTranscript);
-
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = setTimeout(() => {
-          if (finalTranscript.trim() && !isCoachSpeakingRef.current) {
-            processUserSpeech(finalTranscript.trim());
-            finalTranscript = '';
-          }
-        }, 1500);
-      };
-
-      recognition.onerror = (event: any) => {
-        console.error('Error de reconocimiento de voz:', event.error);
-        if (event.error === 'not-allowed') setIsMicActive(false);
-      };
-      
-      recognition.onend = () => {
-        console.log("Recognition service ended.");
-      };
-
-      recognitionRef.current = recognition;
-
-    } else {
-      console.warn("El reconocimiento de voz no es soportado por este navegador.");
-    }
-
-    // Habla el saludo de "Carlos"
-    speakCoach(messages[0].text, () => {});
-
-    return () => {
+  // ======== TTS de Carlos ========
+  function coachSpeak(text: string) {
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "es-MX";
+      u.rate = 1.0;
+      u.onstart = () => setSpeaking(true);
+      u.onend = () => setSpeaking(false);
       window.speechSynthesis.cancel();
-      if (recognitionRef.current) recognitionRef.current.stop();
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      if (webcamRef.current && webcamRef.current.srcObject) {
-        const stream = webcamRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach(track => track.stop());
+      window.speechSynthesis.speak(u);
+    } catch {}
+  }
+
+  // ======== Respuesta de Carlos según MODO ========
+  function carlosReply(mode: CarlosMode, leaderText: string) {
+    const txt = leaderText.toLowerCase();
+
+    switch (mode) {
+      case "frustrado":
+        if (txt.includes("qué opinas") || txt.includes("opinas")) {
+          return "Honestamente, siento que haga lo que haga el Dr. Silva no me va a tomar en serio.";
+        }
+        return "Jefe, ya intenté de todo y el Dr. Silva simplemente me ignora. Me frustra mucho esta situación.";
+
+      case "enojado":
+        if (txt.includes("calma") || txt.includes("tranquilo")) {
+          return "Yo sé que debo calmarme, pero siento que se están burlando de nuestro trabajo.";
+        }
+        return "Esto ya es demasiado. El Dr. Silva me está faltando al respeto y favorece abiertamente a la competencia.";
+
+      case "inseguro":
+        if (txt.includes("confías") || txt.includes("crees en ti")) {
+          return "Me cuesta confiar en mí mismo cuando todo me sale mal con este doctor.";
+        }
+        return "La verdad… siento que quizá yo no soy la persona adecuada para manejar a este médico.";
+
+      case "tecnico":
+        return "Con datos en la mano, el Dr. Silva está recibiendo mayor valor percibido de CompetiPharma. Necesitamos una propuesta más sólida y diferenciada.";
+
+      case "proactivo":
+        if (txt.includes("qué propones") || txt.includes("ideas")) {
+          return "Podemos mapear de nuevo sus necesidades, proponer un plan por fases y ofrecerle algo que la competencia no tiene.";
+        }
+        return "Entiendo el reto. Traigo algunas ideas para recuperar la relación con el Dr. Silva, si te parece las vamos revisando juntos.";
+
+      case "resignado":
+        return "Honestamente, siento que ya no tiene caso insistir con el Dr. Silva. Todo indica que ya decidió trabajar con la competencia.";
+
+      default:
+        return "Estoy listo para empezar cuando tú me digas. ¿Por dónde te gustaría arrancar?";
+    }
+  }
+
+  function openingByMode(mode: CarlosMode): string {
+    switch (mode) {
+      case "frustrado":
+        return "Jefe, gracias por tu tiempo. Estoy muy frustrado con la situación del Dr. Silva.";
+      case "enojado":
+        return "Necesito hablar contigo ya. Lo que está pasando con el Dr. Silva me parece inaceptable.";
+      case "inseguro":
+        return "Quería pedirte ayuda… siento que no estoy logrando nada con el Dr. Silva.";
+      case "tecnico":
+        return "Traigo datos actualizados del Dr. Silva y su comportamiento de prescripción. Me gustaría revisarlos contigo.";
+      case "proactivo":
+        return "Gracias por el espacio. Me gustaría que veamos juntos cómo mejorar la relación con el Dr. Silva.";
+      case "resignado":
+        return "Para ser sincero, ya casi me rindo con el Dr. Silva… pero sé que tenemos que hablarlo.";
+      default:
+        return "Estoy listo para la sesión de coaching. ¿Por dónde empezamos?";
+    }
+  }
+
+  function pushUserTurn(text: string) {
+    const leaderMsg: Message = { role: "user", text };
+    const carlosMsg: Message = { role: "coach", text: carlosReply(mode, text) };
+    setMessages((prev) => [...prev, leaderMsg, carlosMsg]);
+    coachSpeak(carlosMsg.text);
+  }
+
+  // ======== STT: voz continua ========
+  function startListening() {
+    if (listening) return;
+    const SR =
+      (window as any).webkitSpeechRecognition ||
+      (window as any).SpeechRecognition;
+    if (!SR) {
+      alert(
+        "Tu navegador no soporta reconocimiento de voz. Usa Chrome/Edge o prueba modo texto."
+      );
+      return;
+    }
+    const rec: SpeechRecognition = new SR();
+    rec.lang = "es-MX";
+    rec.continuous = true;
+    rec.interimResults = true;
+
+    rec.onresult = (ev: SpeechRecognitionEvent) => {
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const res = ev.results[i];
+        if (res.isFinal) {
+          const said = res[0].transcript.trim();
+          if (said) pushUserTurn(said);
+        }
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [processUserSpeech, speakCoach]); // Dependencias estables
+    rec.onerror = (e) => console.warn("STT error:", e.error);
+    rec.onend = () => {
+      if (listening) {
+        try {
+          rec.start();
+        } catch {}
+      }
+    };
 
-
-  // Handler para el botón principal (sin cambios)
-  const toggleMicActive = () => {
-    if (!recognitionRef.current) return;
-    const nextState = !isMicActiveRef.current;
-    setIsMicActive(nextState);
-    if (nextState) {
-      recognitionRef.current.start();
-    } else {
-      recognitionRef.current.stop();
-    }
-  };
-
-  // Función de evaluación (sin cambios)
-  const evaluate = async () => {
-    setLoadingEval(true);
+    recognitionRef.current = rec;
     try {
-      const transcript = messages.map(m => `${m.role === "user" ? "Líder" : "Empleado"}: ${m.text}`).join("\n\n");
-      const res = await fetch("/api/eval", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript }),
-      });
-      const data = await res.json();
-      setEvalResult(data);
-    } finally {
-      setLoadingEval(false);
+      rec.start();
+      setListening(true);
+    } catch (e) {
+      console.warn("No se pudo iniciar STT:", e);
+      alert(
+        "No pude iniciar el micrófono. Revisa permisos en el candado del navegador."
+      );
     }
-  };
+  }
 
-  // JSX (sin cambios)
+  function stopListening() {
+    setListening(false);
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+  }
+
+  // ======== Evaluación ========
+  async function evaluateNow() {
+    const transcript = messages
+      .map((m) => `${m.role === "user" ? "LIDER" : "CARLOS"}: ${m.text}`)
+      .join("\n");
+    const res = await fetch("/api/eval", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript }),
+    });
+    const data = await res.json();
+    setEvalResult(data);
+  }
+
+  // ======== UI ========
   return (
-    <>
-      <header className="session-header">
-        <h2>Leo – Simulación de Entrevista</h2>
-      </header>
-      
-      <main className="session-container">
-        <div className="coach-view">
-          <img src="/avatar.png" alt="Avatar" className="coach-avatar" />
-        </div>
-        <div className="chat-ui">
-          <div className="user-view">
-            <video ref={webcamRef} autoPlay muted playsInline className="user-webcam"></video>
-          </div>
-          <div className="chat-messages">
-            {messages.map((m, i) => (
-              <div key={i} className={`chat-message ${m.role}`}>
-                <b>{m.role === "user" ? "Tú (Líder)" : "Carlos (Empleado)"}</b>
-                {m.text}
-              </div>
-            ))}
-          </div>
-          <div className="chat-controls">
-            <input
-              value={input}
-              readOnly
-              placeholder={isCoachSpeaking ? "Carlos hablando..." : (isMicActive ? "Escuchando..." : "Micrófono apagado")}
-            />
-            <button
-              onClick={toggleMicActive}
-              className={`record-button ${isMicActive ? "recording" : ""}`}
-              disabled={isCoachSpeaking}
-            >
-              {isMicActive ? "Micróf ON" : "Micróf OFF"}
-            </button>
-            <button onClick={evaluate} disabled={loadingEval}>
-              {loadingEval ? "Evaluando…" : "Evaluar"}
-            </button>
-          </div>
-        </div>
-      </main>
+    <div style={wrap}>
+      <div style={header}>🧠 Leo – Sesión de coaching con Carlos</div>
+      <div style={subHeader}>
+        Modo seleccionado: <b style={{ color: "#a5b4fc" }}>{mode}</b>
+      </div>
 
+      <div style={grid}>
+        {/* Panel Avatar (Carlos) */}
+        <div style={{ ...panel, position: "relative" }}>
+          <span style={tag}>Carlos (avatar)</span>
+          <img
+            src="/avatar.png"
+            alt="Carlos"
+            style={{
+              width: "100%",
+              height: 360,
+              objectFit: "cover",
+              borderRadius: 8,
+              border: "1px solid #111827",
+            }}
+          />
+        </div>
+
+        {/* Panel cámara líder */}
+        <div style={{ ...panel, position: "relative" }}>
+          <span style={tag}>Tú (líder)</span>
+          <video
+            ref={userVideoRef}
+            muted
+            playsInline
+            style={{
+              width: "100%",
+              height: 360,
+              objectFit: "cover",
+              borderRadius: 8,
+              border: "1px solid #111827",
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Controles voz + evaluación */}
+      <div
+        style={{
+          display: "flex",
+          gap: 12,
+          justifyContent: "center",
+          marginTop: 18,
+        }}
+      >
+        {!listening ? (
+          <button
+            onClick={startListening}
+            style={{
+              background: "#6366f1",
+              color: "#fff",
+              padding: "10px 18px",
+              border: 0,
+              borderRadius: 999,
+            }}
+          >
+            Iniciar voz
+          </button>
+        ) : (
+          <button
+            onClick={stopListening}
+            style={{
+              background: "#374151",
+              color: "#fff",
+              padding: "10px 18px",
+              border: 0,
+              borderRadius: 999,
+            }}
+          >
+            Pausar voz
+          </button>
+        )}
+        <button
+          onClick={evaluateNow}
+          style={{
+            background: "#0ea5e9",
+            color: "#081018",
+            padding: "10px 18px",
+            border: 0,
+            borderRadius: 999,
+          }}
+        >
+          Evaluar conversación
+        </button>
+      </div>
+
+      {/* Chat transcript */}
+      <div style={{ ...panel, marginTop: 16 }}>
+        <div style={{ maxHeight: 280, overflowY: "auto", padding: 6 }}>
+          {messages.map((m, i) => (
+            <div
+              key={i}
+              style={{
+                display: "flex",
+                justifyContent:
+                  m.role === "user" ? "flex-end" : "flex-start",
+                margin: "8px 0",
+              }}
+            >
+              <div
+                style={{
+                  maxWidth: "80%",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  background: m.role === "user" ? "#1e293b" : "#0f172a",
+                  color: "#e5e7eb",
+                  border: "1px solid #1f2937",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 12,
+                    opacity: 0.7,
+                    marginBottom: 4,
+                  }}
+                >
+                  {m.role === "user" ? "Tú (líder)" : "Carlos"}
+                </div>
+                <div style={{ whiteSpace: "pre-wrap" }}>{m.text}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Entrada de texto: Enter envía */}
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && input.trim()) {
+              pushUserTurn(input.trim());
+              setInput("");
+            }
+          }}
+          placeholder="Habla con Carlos o escribe y pulsa Enter…"
+          style={{
+            width: "100%",
+            marginTop: 10,
+            padding: "12px 14px",
+            borderRadius: 10,
+            border: "1px solid #1f2937",
+            background: "#020617",
+            color: "#e5e7eb",
+          }}
+        />
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            marginTop: 10,
+            fontSize: 12,
+            color: "#9ca3af",
+          }}
+        >
+          <span>Voz: {listening ? "🎙️ escuchando" : "⏸️ en pausa"}</span>
+          <span> Carlos: {speaking ? "🔊 hablando" : "🤐 en silencio"}</span>
+        </div>
+      </div>
+
+      {/* Resultados evaluación */}
       {evalResult && (
-        <section style={{ position: 'fixed', top: 20, right: 20, background: 'white', color: 'black', padding: 20, borderRadius: 8, zIndex: 100, maxWidth: 400 }}>
-          <h3>Resultados</h3>
-          <pre style={{ background: "#f7f7f7", padding: 12, borderRadius: 8, whiteSpace: "pre-wrap", maxHeight: 400, overflow: 'auto' }}>
+        <div style={{ ...panel, marginTop: 16 }}>
+          <h3 style={{ marginTop: 0, color: "#bfdbfe" }}>
+            Resultados de la evaluación
+          </h3>
+          <pre
+            style={{
+              margin: 0,
+              background: "#020617",
+              padding: 12,
+              borderRadius: 8,
+              color: "#d1d5db",
+              border: "1px solid #1f2937",
+            }}
+          >
             {JSON.stringify(evalResult, null, 2)}
           </pre>
-          <button onClick={() => setEvalResult(null)} style={{marginTop: 10}}>Cerrar</button>
-        </section>
+        </div>
       )}
-    </>
+    </div>
   );
 }

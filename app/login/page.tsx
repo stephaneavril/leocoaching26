@@ -13,7 +13,7 @@ export default function LoginPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
-    if (res.ok) window.location.href = "/interactive-session";
+    if (res.ok) window.location.href = "/carlos-mode";
     else setErr("Usuario o contraseña inválidos");
   };
 
