@@ -19,6 +19,7 @@ export default function InteractiveSession() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [evalResult, setEvalResult] = useState<any>(null);
+  const [loadingReply, setLoadingReply] = useState(false);
 
   // ---- Voz (STT + TTS) ----
   const [listening, setListening] = useState(false);
@@ -85,7 +86,12 @@ export default function InteractiveSession() {
       sessionStorage.setItem("carlosMode", finalMode);
     }
     setMode(finalMode);
-    setMessages([{ role: "coach", text: openingByMode(finalMode) }]);
+    setMessages([
+      {
+        role: "coach",
+        text: openingByMode(finalMode),
+      },
+    ]);
   }, []);
 
   // ======== Cámara del usuario ========
@@ -119,46 +125,7 @@ export default function InteractiveSession() {
     } catch {}
   }
 
-  // ======== Respuesta de Carlos según MODO ========
-  function carlosReply(currentMode: CarlosMode, leaderText: string) {
-    const txt = leaderText.toLowerCase();
-
-    switch (currentMode) {
-      case "frustrado":
-        if (txt.includes("qué opinas") || txt.includes("opinas")) {
-          return "Honestamente, siento que haga lo que haga el Dr. Silva no me va a tomar en serio.";
-        }
-        return "Jefe, ya intenté de todo y el Dr. Silva simplemente me ignora. Me frustra mucho esta situación.";
-
-      case "enojado":
-        if (txt.includes("calma") || txt.includes("tranquilo")) {
-          return "Yo sé que debo calmarme, pero siento que se están burlando de nuestro trabajo.";
-        }
-        return "Esto ya es demasiado. El Dr. Silva me está faltando al respeto y favorece abiertamente a la competencia.";
-
-      case "inseguro":
-        if (txt.includes("confías") || txt.includes("crees en ti")) {
-          return "Me cuesta confiar en mí mismo cuando todo me sale mal con este doctor.";
-        }
-        return "La verdad… siento que quizá yo no soy la persona adecuada para manejar a este médico.";
-
-      case "tecnico":
-        return "Con datos en la mano, el Dr. Silva está recibiendo mayor valor percibido de CompetiPharma. Necesitamos una propuesta más sólida y diferenciada.";
-
-      case "proactivo":
-        if (txt.includes("qué propones") || txt.includes("ideas")) {
-          return "Podemos mapear de nuevo sus necesidades, proponer un plan por fases y ofrecerle algo que la competencia no tiene.";
-        }
-        return "Entiendo el reto. Traigo algunas ideas para recuperar la relación con el Dr. Silva, si te parece las vamos revisando juntos.";
-
-      case "resignado":
-        return "Honestamente, siento que ya no tiene caso insistir con el Dr. Silva. Todo indica que ya decidió trabajar con la competencia.";
-
-      default:
-        return "Estoy listo para empezar cuando tú me digas. ¿Por dónde te gustaría arrancar?";
-    }
-  }
-
+  // ======== Mensaje inicial según modo ========
   function openingByMode(m: CarlosMode): string {
     switch (m) {
       case "frustrado":
@@ -178,11 +145,50 @@ export default function InteractiveSession() {
     }
   }
 
-  function pushUserTurn(text: string) {
-    const leaderMsg: Message = { role: "user", text };
-    const carlosMsg: Message = { role: "coach", text: carlosReply(mode, text) };
-    setMessages((prev) => [...prev, leaderMsg, carlosMsg]);
-    coachSpeak(carlosMsg.text);
+  // ======== Turno del líder -> IA genera respuesta de Carlos ========
+  async function pushUserTurn(text: string) {
+    if (!text.trim() || loadingReply) return;
+
+    const leaderMsg: Message = { role: "user", text: text.trim() };
+
+    // historial que enviaremos a la IA (incluyendo este turno)
+    const historyToSend: Message[] = [...messages, leaderMsg];
+
+    // mostramos al líder de inmediato
+    setMessages((prev) => [...prev, leaderMsg]);
+    setLoadingReply(true);
+
+    try {
+      const res = await fetch("/api/carlos-reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          history: historyToSend,
+        }),
+      });
+
+      const data = await res.json();
+      const replyText: string =
+        typeof data.reply === "string"
+          ? data.reply
+          : "Necesito un poco más de información para responder.";
+
+      const carlosMsg: Message = { role: "coach", text: replyText };
+
+      setMessages((prev) => [...prev, carlosMsg]);
+      coachSpeak(carlosMsg.text);
+    } catch (e) {
+      console.error("Error obteniendo respuesta de Carlos:", e);
+      const fallback: Message = {
+        role: "coach",
+        text: "Hubo un problema para procesar lo que dijiste, pero me interesa seguir la conversación. ¿Puedes repetirlo de otra forma?",
+      };
+      setMessages((prev) => [...prev, fallback]);
+      coachSpeak(fallback.text);
+    } finally {
+      setLoadingReply(false);
+    }
   }
 
   // ======== STT: voz continua ========
@@ -208,7 +214,10 @@ export default function InteractiveSession() {
         const res = ev.results[i];
         if (res.isFinal) {
           const said = res[0].transcript.trim();
-          if (said) pushUserTurn(said);
+          if (said) {
+            // no esperamos explícitamente, solo disparamos
+            void pushUserTurn(said);
+          }
         }
       }
     };
@@ -390,11 +399,16 @@ export default function InteractiveSession() {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && input.trim()) {
-              pushUserTurn(input.trim());
+              const t = input.trim();
               setInput("");
+              void pushUserTurn(t);
             }
           }}
-          placeholder="Habla con Carlos o escribe y pulsa Enter…"
+          placeholder={
+            loadingReply
+              ? "Esperando respuesta de Carlos…"
+              : "Habla con Carlos o escribe y pulsa Enter…"
+          }
           style={{
             width: "100%",
             marginTop: 10,
@@ -417,6 +431,7 @@ export default function InteractiveSession() {
         >
           <span>Voz: {listening ? "🎙️ escuchando" : "⏸️ en pausa"}</span>
           <span> Carlos: {speaking ? "🔊 hablando" : "🤐 en silencio"}</span>
+          {loadingReply && <span>Procesando respuesta de Carlos…</span>}
         </div>
       </div>
 
