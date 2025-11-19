@@ -12,25 +12,16 @@ type CarlosMode =
   | "resignado";
 
 export default function InteractiveSession() {
-  const urlMode = searchParams.get("mode") as CarlosMode | null;
-  const initialMode: CarlosMode =
-    urlMode ||
-    (typeof window !== "undefined"
-      ? ((sessionStorage.getItem("carlosMode") as CarlosMode) || "proactivo")
-      : "proactivo");
-
-  const [mode] = useState<CarlosMode>(initialMode);
+  // ---- Modo de Carlos ----
+  const [mode, setMode] = useState<CarlosMode>("proactivo");
 
   // ---- Estado de conversación ----
-  const [messages, setMessages] = useState<Message[]>(() => [
-    { role: "coach", text: openingByMode(initialMode) },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [evalResult, setEvalResult] = useState<any>(null);
 
   // ---- Voz (STT + TTS) ----
   const [listening, setListening] = useState(false);
-  // 👇 OJO: aquí quitamos SpeechRecognition y usamos any
   const recognitionRef = useRef<any>(null);
   const [speaking, setSpeaking] = useState(false);
 
@@ -85,6 +76,18 @@ export default function InteractiveSession() {
     letterSpacing: 0.8,
   };
 
+  // ======== Inicializar modo y primer mensaje (solo en cliente) ========
+  useEffect(() => {
+    let finalMode: CarlosMode = "proactivo";
+    if (typeof window !== "undefined") {
+      const fromStorage = sessionStorage.getItem("carlosMode") as CarlosMode | null;
+      finalMode = fromStorage || "proactivo";
+      sessionStorage.setItem("carlosMode", finalMode);
+    }
+    setMode(finalMode);
+    setMessages([{ role: "coach", text: openingByMode(finalMode) }]);
+  }, []);
+
   // ======== Cámara del usuario ========
   useEffect(() => {
     (async () => {
@@ -117,10 +120,10 @@ export default function InteractiveSession() {
   }
 
   // ======== Respuesta de Carlos según MODO ========
-  function carlosReply(mode: CarlosMode, leaderText: string) {
+  function carlosReply(currentMode: CarlosMode, leaderText: string) {
     const txt = leaderText.toLowerCase();
 
-    switch (mode) {
+    switch (currentMode) {
       case "frustrado":
         if (txt.includes("qué opinas") || txt.includes("opinas")) {
           return "Honestamente, siento que haga lo que haga el Dr. Silva no me va a tomar en serio.";
@@ -156,8 +159,8 @@ export default function InteractiveSession() {
     }
   }
 
-  function openingByMode(mode: CarlosMode): string {
-    switch (mode) {
+  function openingByMode(m: CarlosMode): string {
+    switch (m) {
       case "frustrado":
         return "Jefe, gracias por tu tiempo. Estoy muy frustrado con la situación del Dr. Silva.";
       case "enojado":
@@ -195,13 +198,11 @@ export default function InteractiveSession() {
       return;
     }
 
-    // 👇 quitamos el tipo SpeechRecognition y usamos any
     const rec: any = new SR();
     rec.lang = "es-MX";
     rec.continuous = true;
     rec.interimResults = true;
 
-    // 👇 aquí también: SpeechRecognitionEvent -> any
     rec.onresult = (ev: any) => {
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
         const res = ev.results[i];
