@@ -1,6 +1,5 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
 
 type Message = { role: "user" | "coach"; text: string };
 
@@ -13,7 +12,6 @@ type CarlosMode =
   | "resignado";
 
 export default function InteractiveSession() {
-  const searchParams = useSearchParams();
   const urlMode = searchParams.get("mode") as CarlosMode | null;
   const initialMode: CarlosMode =
     urlMode ||
