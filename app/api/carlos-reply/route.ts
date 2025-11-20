@@ -73,12 +73,12 @@ Contexto:
     // 2) AUDIO (TTS) de Carlos
     let audioBase64: string | null = null;
     try {
-      const speech = await client.audio.speech.create({
+        const speech = await client.audio.speech.create({
         model: "gpt-4o-mini-tts",
         voice: "alloy",
-        format: "mp3",
         input: reply,
-      });
+        });
+
 
       const audioBuffer = Buffer.from(await speech.arrayBuffer());
       audioBase64 = audioBuffer.toString("base64");
