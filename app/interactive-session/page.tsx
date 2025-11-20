@@ -29,6 +29,12 @@ export default function InteractiveSession() {
   // ---- Cámara del usuario ----
   const userVideoRef = useRef<HTMLVideoElement | null>(null);
 
+  // ---- Audio IA ----
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // ---- Voz navegador (fallback) ----
+  const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
+
   // ======== UI estilos ========
   const wrap: React.CSSProperties = {
     maxWidth: 1200,
@@ -112,17 +118,72 @@ export default function InteractiveSession() {
     })();
   }, []);
 
-  // ======== TTS de Carlos ========
-  function coachSpeak(text: string) {
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "es-MX";
-      u.rate = 1.0;
-      u.onstart = () => setSpeaking(true);
-      u.onend = () => setSpeaking(false);
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(u);
-    } catch {}
+  // ======== Voz IA + fallback navegador ========
+  function coachSpeak(text: string, audioBase64?: string | null) {
+    // 1) Si tenemos audio IA (mp3 en base64), lo usamos
+    if (audioBase64 && audioRef.current) {
+      const src = `data:audio/mpeg;base64,${audioBase64}`;
+      audioRef.current.src = src;
+      audioRef.current.onplaying = () => setSpeaking(true);
+      audioRef.current.onended = () => setSpeaking(false);
+      audioRef.current.onerror = () => setSpeaking(false);
+      audioRef.current
+        .play()
+        .catch((e) => {
+          console.warn("Error reproduciendo audio IA, uso fallback:", e);
+          fallbackSpeechSynthesis(text);
+        });
+      return;
+    }
+
+    // 2) Si no hay audio IA, usamos speechSynthesis como backup
+    fallbackSpeechSynthesis(text);
+  }
+
+  function fallbackSpeechSynthesis(text: string) {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+
+    function pickSpanishVoice(): SpeechSynthesisVoice | null {
+      const voices = window.speechSynthesis.getVoices();
+      if (!voices.length) return null;
+
+      const googleEs = voices.find(
+        (v) =>
+          v.lang.toLowerCase().startsWith("es") &&
+          v.name.toLowerCase().includes("google")
+      );
+      if (googleEs) return googleEs;
+
+      const anyEs = voices.find((v) => v.lang.toLowerCase().startsWith("es"));
+      if (anyEs) return anyEs;
+
+      return voices[0] || null;
+    }
+
+    if (!voiceRef.current) {
+      const existing = window.speechSynthesis.getVoices();
+      if (existing.length) {
+        voiceRef.current = pickSpanishVoice();
+      } else {
+        window.speechSynthesis.onvoiceschanged = () => {
+          voiceRef.current = pickSpanishVoice();
+        };
+      }
+    }
+
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "es-MX";
+    u.rate = 0.9;
+    u.pitch = 1.05;
+    if (voiceRef.current) {
+      u.voice = voiceRef.current;
+    }
+
+    u.onstart = () => setSpeaking(true);
+    u.onend = () => setSpeaking(false);
+
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
   }
 
   // ======== Mensaje inicial según modo ========
@@ -150,11 +211,8 @@ export default function InteractiveSession() {
     if (!text.trim() || loadingReply) return;
 
     const leaderMsg: Message = { role: "user", text: text.trim() };
-
-    // historial que enviaremos a la IA (incluyendo este turno)
     const historyToSend: Message[] = [...messages, leaderMsg];
 
-    // mostramos al líder de inmediato
     setMessages((prev) => [...prev, leaderMsg]);
     setLoadingReply(true);
 
@@ -177,12 +235,13 @@ export default function InteractiveSession() {
       const carlosMsg: Message = { role: "coach", text: replyText };
 
       setMessages((prev) => [...prev, carlosMsg]);
-      coachSpeak(carlosMsg.text);
+      coachSpeak(carlosMsg.text, data.audioBase64); // 👈 usamos la voz IA aquí
     } catch (e) {
       console.error("Error obteniendo respuesta de Carlos:", e);
       const fallback: Message = {
         role: "coach",
-        text: "Hubo un problema para procesar lo que dijiste, pero me interesa seguir la conversación. ¿Puedes repetirlo de otra forma?",
+        text:
+          "Hubo un problema para procesar lo que dijiste, pero me interesa seguir la conversación. ¿Puedes repetirlo de otra forma?",
       };
       setMessages((prev) => [...prev, fallback]);
       coachSpeak(fallback.text);
@@ -215,7 +274,6 @@ export default function InteractiveSession() {
         if (res.isFinal) {
           const said = res[0].transcript.trim();
           if (said) {
-            // no esperamos explícitamente, solo disparamos
             void pushUserTurn(said);
           }
         }
@@ -265,6 +323,9 @@ export default function InteractiveSession() {
   // ======== UI ========
   return (
     <div style={wrap}>
+      {/* reproductor de audio IA oculto */}
+      <audio ref={audioRef} style={{ display: "none" }} />
+
       <div style={header}>🧠 Leo – Sesión de coaching con Carlos</div>
       <div style={subHeader}>
         Modo seleccionado: <b style={{ color: "#a5b4fc" }}>{mode}</b>

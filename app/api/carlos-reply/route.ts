@@ -16,7 +16,10 @@ type CarlosMode =
 export async function POST(req: Request) {
   if (!process.env.OPENAI_API_KEY) {
     return NextResponse.json(
-      { reply: "No tengo conexión al modelo de IA en este momento." },
+      {
+        reply: "No tengo conexión al modelo de IA en este momento.",
+        audioBase64: null,
+      },
       { status: 200 }
     );
   }
@@ -32,18 +35,17 @@ export async function POST(req: Request) {
     {
       role: "system" as const,
       content: `
-Eres CARLOS, un representante de ventas farmacéuticas que está en una sesión de coaching con su jefe (el líder).
+Eres CARLOS, un representante de ventas farmacéuticas en una sesión de coaching con su jefe (el líder).
 
 Contexto:
 - Tu cliente problema es el Dr. Silva.
 - Tu tono y estilo dependen del modo: ${modeDescription}
-- Siempre respondes en ESPAÑOL neutro, profesional, natural.
-- No repites saludos ("Hola jefe..." etc.) en cada turno.
-- Respondes en 1 a 3 frases, máximo.
-- Siempre reaccionas a lo que acaba de decir el líder (no hablas al vacío).
-- Puedes expresar emociones, pero con foco en avanzar la conversación y el aprendizaje.
-- Si el líder hace buenas preguntas, reconoce eso.
-- No inventes datos clínicos ni promociones agresivas de productos, enfócate en la situación relacional con el médico y el desempeño del representante.
+- Siempre respondes en ESPAÑOL neutro, profesional y natural.
+- NO repites saludos en cada turno.
+- Respondes en 1 a 3 frases máximo.
+- Reaccionas siempre a lo que acaba de decir el líder.
+- Puedes expresar emociones, pero enfocado en aprender y avanzar.
+- No inventes datos clínicos ni promociones agresivas de productos.
       `.trim(),
     },
     ...history.map((m) => ({
@@ -56,8 +58,9 @@ Contexto:
   ];
 
   try {
+    // 1) TEXTO de Carlos
     const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini", // cambia si usas otro modelo
+      model: "gpt-4o-mini",
       messages,
       temperature: 0.7,
       max_tokens: 180,
@@ -67,11 +70,31 @@ Contexto:
       completion.choices[0]?.message?.content?.trim() ||
       "Necesito un poco más de información para responder.";
 
-    return NextResponse.json({ reply }, { status: 200 });
+    // 2) AUDIO (TTS) de Carlos
+    let audioBase64: string | null = null;
+    try {
+      const speech = await client.audio.speech.create({
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        format: "mp3",
+        input: reply,
+      });
+
+      const audioBuffer = Buffer.from(await speech.arrayBuffer());
+      audioBase64 = audioBuffer.toString("base64");
+    } catch (e) {
+      console.error("Error generando TTS para Carlos:", e);
+      audioBase64 = null;
+    }
+
+    return NextResponse.json({ reply, audioBase64 }, { status: 200 });
   } catch (e) {
     console.error("Error en carlos-reply:", e);
     return NextResponse.json(
-      { reply: "Hubo un problema con el modelo de IA. Intenta de nuevo." },
+      {
+        reply: "Hubo un problema con el modelo de IA. Intenta de nuevo.",
+        audioBase64: null,
+      },
       { status: 200 }
     );
   }
@@ -82,15 +105,15 @@ function getModeDescription(mode: CarlosMode): string {
     case "frustrado":
       return "Frustrado: siente que ha hecho muchos intentos con el Dr. Silva y no ve avances. Se queja, pero está dispuesto a escuchar.";
     case "enojado":
-      return "Enojado: está irritado, percibe injusticia y puede sonar duro, pero debe evitar faltar al respeto.";
+      return "Enojado: está irritado, percibe injusticia y puede sonar duro, pero sin faltar al respeto.";
     case "inseguro":
       return "Inseguro: duda de sus capacidades, se cuestiona a sí mismo, busca validación y claridad.";
     case "tecnico":
       return "Técnico: muy orientado a datos y lógica, habla de indicadores, pero a veces desconectado de la emoción.";
     case "proactivo":
-      return "Proactivo: está motivado, quiere mejorar, propone ideas, acepta feedback.";
+      return "Proactivo: está motivado, quiere mejorar, propone ideas y acepta feedback.";
     case "resignado":
-      return "Resignado: siente que nada va a cambiar, energía baja, respuestas cortas, pero puede ir abriéndose si el líder ayuda.";
+      return "Resignado: siente que nada va a cambiar, energía baja, pero puede ir abriéndose si el líder ayuda.";
     default:
       return "Neutral: colaborativo, profesional, abierto a la conversación.";
   }
