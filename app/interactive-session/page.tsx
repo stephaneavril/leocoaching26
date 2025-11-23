@@ -336,7 +336,7 @@ export default function InteractiveSession() {
         <div style={{ ...panel, position: "relative" }}>
           <span style={tag}>Carlos (avatar)</span>
           <img
-            src="/avatar.png"
+            src="/avatar.mp4"
             alt="Carlos"
             style={{
               width: "100%",
